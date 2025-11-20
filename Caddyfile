@@ -1,99 +1,91 @@
 {
-  admin off
+	admin off
+
+	log {
+		output stderr
+		format filter {
+			# Preserves first 8 bits from IPv4 and 32 bits from IPv6
+			request>remote_ip ip_mask 8 32
+			request>client_ip ip_mask 8 32
+
+			# Remove identificable information
+			request>remote_port delete
+			request>headers delete
+			request>uri query {
+				delete url
+				delete h
+				delete q
+			}
+		}
+	}
+
+	servers {
+		client_ip_headers X-Forwarded-For X-Real-IP
+
+		# Allow the following IP to passthrough the "X-Forwarded-*" headers to SearXNG
+		# https://caddyserver.com/docs/caddyfile/options#trusted-proxies
+		trusted_proxies static private_ranges
+		trusted_proxies_strict
+	}
 }
 
-{$SEARXNG_HOSTNAME} {
-  log {
-        output discard
-  }
+{$SEARXNG_HOSTNAME}
 
-  tls {$SEARXNG_TLS}
+tls {$SEARXNG_TLS}
 
-  @api {
-        path /config
-        path /healthz
-        path /stats/errors
-        path /stats/checker
-  }
+encode zstd gzip
 
-  @static {
-        path /static/*
-  }
-
-  @notstatic {
-        not path /static/*
-  }
-
-  @imageproxy {
-        path /image_proxy
-  }
-
-  @notimageproxy {
-        not path /image_proxy
-  }
-
-  header {
-        # Enable HTTP Strict Transport Security (HSTS) to force clients to always connect via HTTPS
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-
-        # Enable cross-site filter (XSS) and tell browser to block detected attacks
-        X-XSS-Protection "1; mode=block"
-
-        # Prevent some browsers from MIME-sniffing a response away from the declared Content-Type
-        X-Content-Type-Options "nosniff"
-
-        # Disable some features
-        Permissions-Policy "accelerometer=(),ambient-light-sensor=(),autoplay=(),camera=(),encrypted-media=(),focus-without-user-activation=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(),midi=(),payment=(),picture-in-picture=(),speaker=(),sync-xhr=(),usb=(),vr=()"
-
-        # Disable some features (legacy)
-        Feature-Policy "accelerometer 'none';ambient-light-sensor 'none'; autoplay 'none';camera 'none';encrypted-media 'none';focus-without-user-activation 'none'; geolocation 'none';gyroscope 'none';magnetometer 'none';microphone 'none';midi 'none';payment 'none';picture-in-picture 'none'; speaker 'none';sync-xhr 'none';usb 'none';vr 'none'"
-
-        # Referer
-        Referrer-Policy "no-referrer"
-
-        # X-Robots-Tag
-        X-Robots-Tag "noindex, noarchive, nofollow"
-
-        # Remove Server header
-        -Server
-  }
-
-  header @api {
-        Access-Control-Allow-Methods "GET, OPTIONS"
-        Access-Control-Allow-Origin  "*"
-  }
-
-  # Cache
-  header @static {
-        # Cache
-        Cache-Control "public, max-age=31536000"
-        defer
-  }
-
-  header @notstatic {
-        # No Cache
-        Cache-Control "no-cache, no-store"
-        Pragma "no-cache"
-  }
-
-  # CSP (see http://content-security-policy.com/ )
-  header @imageproxy {
-        Content-Security-Policy "default-src 'none'; img-src 'self' data:"
-  }
-
-  header @notimageproxy {
-        Content-Security-Policy "upgrade-insecure-requests; default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self' https://github.com/searxng/searxng/issues/new; font-src 'self'; frame-ancestors 'self'; base-uri 'self'; connect-src 'self' https://overpass-api.de; img-src 'self' data: https://*.tile.openstreetmap.org; frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://www.dailymotion.com https://www.deezer.com https://www.mixcloud.com https://w.soundcloud.com https://embed.spotify.com"
-  }
-
-  # SearXNG
-  handle {
-        encode zstd gzip
-
-        reverse_proxy localhost:8080 {
-               header_up X-Forwarded-Port {http.request.port}
-               header_up X-Forwarded-Proto {http.request.scheme}
-               header_up X-Real-IP {remote_host}
-        }
-  }
-
+@api {
+	path /config
+	path /healthz
+	path /stats/errors
+	path /stats/checker
 }
+
+@static {
+	path /static/*
+}
+
+@imageproxy {
+	path /image_proxy
+}
+
+header {
+	# CSP (https://content-security-policy.com)
+	Content-Security-Policy "upgrade-insecure-requests; default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self' https:; font-src 'self'; frame-ancestors 'self'; base-uri 'self'; connect-src 'self'; img-src * data:; frame-src https:;"
+
+	# Disable browser features
+	Permissions-Policy "accelerometer=(),camera=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(),payment=(),usb=()"
+
+	# Only allow same-origin requests
+	Referrer-Policy "same-origin"
+
+	# Prevent MIME type sniffing from the declared Content-Type
+	X-Content-Type-Options "nosniff"
+
+	# Comment header to allow indexing by search engines
+	X-Robots-Tag "noindex, nofollow, noarchive, nositelinkssearchbox, nosnippet, notranslate, noimageindex"
+    
+	# enable HSTS
+	# WARNING: Once this value is set, the site must continue to support HTTPS until the expiry time is reached.
+
+	# Strict-Transport-Security max-age=15768000;
+
+	# Remove "Server" header
+	-Server
+}
+
+header @api {
+	Access-Control-Allow-Methods "GET, OPTIONS"
+	Access-Control-Allow-Origin "*"
+}
+
+route {
+	# Cache policy
+	header Cache-Control "no-cache"
+	header @static Cache-Control "public, max-age=30, stale-while-revalidate=60"
+	header @imageproxy Cache-Control "public, max-age=3600"
+}
+
+# SearXNG
+reverse_proxy localhost:8080
